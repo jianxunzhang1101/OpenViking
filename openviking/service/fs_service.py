@@ -26,14 +26,17 @@ from openviking.storage.abstract_overview import (
     render_abstract_overview,
 )
 from openviking.storage.content_write import ContentWriteCoordinator
+from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.viking_fs import VikingFS
+from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta
+from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import DeadlineExceededError, NotInitializedError
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -110,6 +113,46 @@ class FSService:
             return None
         return self._watch_scheduler.watch_manager
 
+    async def _attach_and_filter_tags(
+        self, entries: List[Dict[str, Any]], ctx: RequestContext, tags: Optional[List[str]]
+    ) -> List[Dict[str, Any]]:
+        normalized_tags = normalize_search_tags(tags, discard_invalid=True)
+        if not entries:
+            return entries
+
+        tags_by_uri: Dict[str, List[str]] = {}
+        if self._vikingdb:
+            uris = list(dict.fromkeys(str(entry.get("uri") or "") for entry in entries if entry.get("uri")))
+            if uris:
+                records = await VikingDBManagerProxy(self._vikingdb, ctx).filter(
+                    filter=And([Or([Eq("uri", item_uri) for item_uri in uris]), In("level", [0, 1, 2])]),
+                    limit=max(len(uris) * 3, 1),
+                    output_fields=["uri", "level", "search_tags"],
+                )
+                records_by_uri: Dict[str, List[Dict[str, Any]]] = {}
+                for record in records:
+                    records_by_uri.setdefault(str(record.get("uri") or ""), []).append(record)
+                for entry in entries:
+                    uri = str(entry.get("uri") or "")
+                    levels = {0, 1} if entry.get("isDir", False) else {2}
+                    result: List[str] = []
+                    for record in sorted(records_by_uri.get(uri, []), key=lambda item: item.get("level", 99)):
+                        if record.get("level") not in levels:
+                            continue
+                        for tag in normalize_search_tags(record.get("search_tags"), discard_invalid=True):
+                            if tag not in result:
+                                result.append(tag)
+                    tags_by_uri[uri] = result
+
+        result_entries: List[Dict[str, Any]] = []
+        for entry in entries:
+            entry = dict(entry)
+            entry_tags = tags_by_uri.get(str(entry.get("uri") or ""), [])
+            entry["tags"] = entry_tags
+            if not normalized_tags or set(normalized_tags).issubset(entry_tags):
+                result_entries.append(entry)
+        return result_entries
+
     async def ls(
         self,
         uri: str,
@@ -123,6 +166,7 @@ class FSService:
         level_limit: int = 3,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
+        tags: Optional[List[str]] = None,
     ) -> List[Any]:
         """List directory contents.
 
@@ -147,7 +191,7 @@ class FSService:
                     ctx=ctx,
                     output="original",
                     show_all_hidden=show_all_hidden,
-                    node_limit=node_limit,
+                    node_limit=None if tags else node_limit,
                     level_limit=level_limit,
                 )
             else:
@@ -156,11 +200,12 @@ class FSService:
                     ctx=ctx,
                     output="original",
                     show_all_hidden=show_all_hidden,
-                    node_limit=node_limit,
+                    node_limit=None if tags else node_limit,
                     sort_by=sort_by,
                     sort_order=sort_order,
                 )
-            return [e.get("uri", "") for e in entries]
+            entries = await self._attach_and_filter_tags(entries, ctx, tags)
+            return [e.get("uri", "") for e in entries[:node_limit]]
 
         if recursive:
             entries = await viking_fs.tree(
@@ -169,7 +214,7 @@ class FSService:
                 output=output,
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
-                node_limit=node_limit,
+                node_limit=None if tags else node_limit,
                 level_limit=level_limit,
             )
         else:
@@ -179,11 +224,11 @@ class FSService:
                 output=output,
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
-                node_limit=node_limit,
+                node_limit=None if tags else node_limit,
                 sort_by=sort_by,
                 sort_order=sort_order,
             )
-        return entries
+        return (await self._attach_and_filter_tags(entries, ctx, tags))[:node_limit]
 
     async def mkdir(
         self,
@@ -562,18 +607,20 @@ class FSService:
         show_all_hidden: bool = False,
         node_limit: int = 1000,
         level_limit: int = 3,
+        tags: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.tree(
+        result = await viking_fs.tree(
             uri,
             ctx=ctx,
             output=output,
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
-            node_limit=node_limit,
+            node_limit=None if tags else node_limit,
             level_limit=level_limit,
         )
+        return (await self._attach_and_filter_tags(result, ctx, tags))[:node_limit]
 
     async def stat(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
         """Get resource status."""
@@ -642,15 +689,36 @@ class FSService:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         level_limit: int = 10,
+        tags: Optional[List[str]] = None,
     ) -> Dict:
         """Content search."""
         viking_fs = self._ensure_initialized()
+        normalized_tags = normalize_search_tags(tags)
+        allowed_uris: Optional[set[str]] = None
+        if normalized_tags:
+            if not self._vikingdb:
+                return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+            from openviking.utils.tags import build_search_tags_filter
+
+            records = await VikingDBManagerProxy(self._vikingdb, ctx).filter(
+                filter=And([
+                    PathScope("uri", uri, depth=level_limit),
+                    In("level", [2]),
+                    RawDSL(build_search_tags_filter(normalized_tags)),
+                ]),
+                limit=100000,
+                output_fields=["uri"],
+            )
+            allowed_uris = {str(record["uri"]) for record in records if record.get("uri")}
+            if not allowed_uris:
+                return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
         kwargs = {
             "exclude_uri": exclude_uri,
             "case_insensitive": case_insensitive,
             "node_limit": node_limit,
             "level_limit": level_limit,
             "ctx": ctx,
+            "allowed_uris": allowed_uris,
         }
         if _may_include_memory_content(uri):
             kwargs["content_transform"] = _visible_grep_content
@@ -681,6 +749,8 @@ class FSService:
         wait: bool = False,
         timeout: Optional[float] = None,
         processing_mode: str = "semantic_and_vectors",
+        tags: list[str] | None = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
         """Write to an existing file and refresh semantics/vectors."""
         viking_fs = self._ensure_initialized()
@@ -693,6 +763,8 @@ class FSService:
             wait=wait,
             timeout=timeout,
             processing_mode=processing_mode,
+            tags=tags,
+            tag_mode=tag_mode,
         )
 
     async def batch_write(

@@ -209,6 +209,59 @@ async def test_grep_projects_memory_content_but_keeps_resource_fast_path(request
 
 
 @pytest.mark.asyncio
+async def test_ls_projects_tags_filters_with_and_before_applying_node_limit(request_context):
+    entries = [
+        {"uri": "viking://resources/a.md", "isDir": False},
+        {"uri": "viking://resources/b.md", "isDir": False},
+        {"uri": "viking://resources/c.md", "isDir": False},
+    ]
+    viking_fs = SimpleNamespace(ls=AsyncMock(return_value=entries))
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            return [
+                {"uri": "viking://resources/a.md", "level": 2, "search_tags": ["team=search"]},
+                {"uri": "viking://resources/b.md", "level": 2, "search_tags": ["team=search", "env=prod"]},
+                {"uri": "viking://resources/c.md", "level": 2, "search_tags": ["team=search", "env=prod"]},
+            ]
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+    result = await service.ls(
+        "viking://resources",
+        ctx=request_context,
+        tags=["team=search", "env=prod"],
+        node_limit=1,
+    )
+
+    assert result == [{"uri": "viking://resources/b.md", "isDir": False, "tags": ["team=search", "env=prod"]}]
+    assert viking_fs.ls.await_args.kwargs["node_limit"] is None
+
+
+@pytest.mark.asyncio
+async def test_tree_projects_directory_tags_from_abstract_and_overview_records(request_context):
+    directory = {"uri": "viking://resources/docs", "isDir": True}
+    viking_fs = SimpleNamespace(tree=AsyncMock(return_value=[directory]))
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            return [
+                {"uri": "viking://resources/docs", "level": 0, "search_tags": ["team=search"]},
+                {"uri": "viking://resources/docs", "level": 1, "search_tags": ["env=prod", "team=search"]},
+                {"uri": "viking://resources/docs", "level": 2, "search_tags": ["ignored=true"]},
+            ]
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+    result = await service.tree(
+        "viking://resources",
+        ctx=request_context,
+        tags=["team=search", "env=prod"],
+    )
+
+    assert result == [{"uri": "viking://resources/docs", "isDir": True, "tags": ["team=search", "env=prod"]}]
+    assert viking_fs.tree.await_args.kwargs["node_limit"] is None
+
+
+@pytest.mark.asyncio
 async def test_resource_rm_enqueues_parent_delete_refresh_and_waits(request_context):
     viking_fs = _FakeVikingFS()
     service = FSService(viking_fs=viking_fs)

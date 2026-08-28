@@ -637,6 +637,7 @@ pub async fn grep(
     ignore_case: bool,
     node_limit: i32,
     level_limit: i32,
+    tags: &[String],
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -648,6 +649,7 @@ pub async fn grep(
             ignore_case,
             node_limit,
             level_limit,
+            tags,
         )
         .await?;
     output_grep_results(&result, output_format, compact);
@@ -833,7 +835,10 @@ mod tests {
 
         assert!(rendered.contains("Deployment summary."));
         for line in ["# Deploy", "Step one.", "Step two.", "Step three."] {
-            assert!(rendered.contains(line), "missing inlined content line: {line}");
+            assert!(
+                rendered.contains(line),
+                "missing inlined content line: {line}"
+            );
         }
     }
 

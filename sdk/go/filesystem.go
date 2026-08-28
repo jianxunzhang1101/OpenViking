@@ -32,6 +32,9 @@ func (c *Client) List(ctx context.Context, uri string, opts *ListOptions) ([]any
 	queryInt(query, "abs_limit", absLimit)
 	queryBool(query, "show_all_hidden", opts.ShowAllHidden)
 	queryInt(query, "node_limit", nodeLimit)
+	if opts.Tags != nil {
+		query["tags"] = opts.Tags
+	}
 	if opts.SortBy != "" {
 		query.Set("sort_by", opts.SortBy)
 	}
@@ -71,6 +74,9 @@ func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]map
 	queryBool(query, "show_all_hidden", opts.ShowAllHidden)
 	queryInt(query, "node_limit", nodeLimit)
 	queryInt(query, "level_limit", levelLimit)
+	if opts.Tags != nil {
+		query["tags"] = opts.Tags
+	}
 	var result []map[string]any
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/fs/tree", query, nil, &result)
 	return result, err
@@ -200,6 +206,14 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "telemetry", opts.Telemetry)
 	setString(payload, "processing_mode", opts.ProcessingMode)
+	if opts.Tags != nil {
+		payload["tags"] = opts.Tags
+		tagMode := opts.TagMode
+		if tagMode == "" {
+			tagMode = "replace"
+		}
+		payload["tag_mode"] = tagMode
+	}
 	if err := mergeExtra(payload, opts.Extra); err != nil {
 		return nil, err
 	}

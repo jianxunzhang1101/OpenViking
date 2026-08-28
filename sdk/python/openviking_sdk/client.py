@@ -1049,6 +1049,7 @@ class AsyncHTTPClient:
         node_limit: int = 1000,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
+        tags: Optional[List[str]] = None,
     ) -> List[Any]:
         params: Dict[str, Any] = {
             "uri": VikingURI.normalize(uri),
@@ -1062,6 +1063,8 @@ class AsyncHTTPClient:
         if sort_by is not None:
             params["sort_by"] = sort_by
             params["sort_order"] = sort_order
+        if tags is not None:
+            params["tags"] = tags
         response = await self._request(
             "GET",
             "/api/v1/fs/ls",
@@ -1077,18 +1080,22 @@ class AsyncHTTPClient:
         show_all_hidden: bool = False,
         node_limit: int = 1000,
         level_limit: int = 3,
+        tags: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {
+            "uri": VikingURI.normalize(uri),
+            "output": output,
+            "abs_limit": abs_limit,
+            "show_all_hidden": show_all_hidden,
+            "node_limit": node_limit,
+            "level_limit": level_limit,
+        }
+        if tags is not None:
+            params["tags"] = tags
         response = await self._request(
             "GET",
             "/api/v1/fs/tree",
-            params={
-                "uri": VikingURI.normalize(uri),
-                "output": output,
-                "abs_limit": abs_limit,
-                "show_all_hidden": show_all_hidden,
-                "node_limit": node_limit,
-                "level_limit": level_limit,
-            },
+            params=params,
         )
         return self._handle_response(response)
 
@@ -1342,12 +1349,14 @@ class AsyncHTTPClient:
         case_insensitive: bool = False,
         node_limit: int = 256,
         exclude_uri: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         request_json = {
             "uri": VikingURI.normalize(uri),
             "pattern": pattern,
             "case_insensitive": case_insensitive,
             "node_limit": node_limit,
+            "tags": tags,
         }
         if exclude_uri is not None:
             request_json["exclude_uri"] = VikingURI.normalize(exclude_uri)

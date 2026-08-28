@@ -6,7 +6,7 @@ import asyncio
 import re
 import sys
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from openviking.pyagfs.exceptions import AGFSNotSupportedError
 from openviking.server.identity import RequestContext
@@ -32,6 +32,7 @@ class _GrepMixin:
         level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
         content_transform: Optional[Callable[[str, str], str]] = None,
+        allowed_uris: Optional[Set[str]] = None,
     ) -> Dict:
         """Content search by pattern or keywords.
 
@@ -86,6 +87,7 @@ class _GrepMixin:
                 level_limit=level_limit,
                 ctx=ctx,
                 content_transform=content_transform,
+                allowed_uris=allowed_uris,
             )
         else:  # "vikingdb_then_fs"
             return await self._grep_vikingdb_then_fs(
@@ -96,6 +98,7 @@ class _GrepMixin:
                 node_limit=node_limit,
                 level_limit=level_limit,
                 ctx=ctx,
+                allowed_uris=allowed_uris,
             )
 
     async def _resolve_grep_engine(
@@ -200,9 +203,10 @@ class _GrepMixin:
         level_limit,
         ctx,
         content_transform=None,
+        allowed_uris=None,
     ):
         """Filesystem grep path: prefer native agfs grep and fall back if unavailable."""
-        if content_transform is None:
+        if content_transform is None and allowed_uris is None:
             try:
                 return await self._grep_with_agfs(
                     uri=uri,
@@ -225,6 +229,7 @@ class _GrepMixin:
             level_limit=level_limit,
             ctx=ctx,
             content_transform=content_transform,
+            allowed_uris=allowed_uris,
         )
 
     async def _grep_vikingdb_then_fs(
@@ -236,6 +241,7 @@ class _GrepMixin:
         node_limit,
         level_limit,
         ctx,
+        allowed_uris=None,
     ):
         """VikingDB bm25 recall + local fs precise matching."""
         vector_store = self._get_vector_store()
@@ -262,7 +268,15 @@ class _GrepMixin:
         # Auto-adapt bm25 recall limit: recall up to 5x requested matches
         # while capping at VikingDB's max limit. If node_limit is unset,
         # use the maximum limit to avoid truncation.
-        remote_return_limit = min(node_limit * 5, 100000) if node_limit else 100000
+        # A tag allowlist has already narrowed the candidate universe.  Do not
+        # apply the user-visible node limit before intersecting BM25 results
+        # with that allowlist, otherwise matching tagged files just beyond the
+        # initial recall window are lost.
+        remote_return_limit = (
+            100000
+            if allowed_uris is not None
+            else min(node_limit * 5, 100000) if node_limit else 100000
+        )
 
         # Step 1: vikingdb recall candidate files
         try:
@@ -291,9 +305,12 @@ class _GrepMixin:
                 node_limit=node_limit,
                 level_limit=level_limit,
                 ctx=ctx,
+                allowed_uris=allowed_uris,
             )
 
         candidate_uris = [r["uri"] for r in result if r.get("uri")]
+        if allowed_uris is not None:
+            candidate_uris = [candidate_uri for candidate_uri in candidate_uris if candidate_uri in allowed_uris]
         if excluded_prefix:
             candidate_uris = [
                 u
@@ -463,6 +480,7 @@ class _GrepMixin:
         level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
         content_transform: Optional[Callable[[str, str], str]] = None,
+        allowed_uris: Optional[Set[str]] = None,
     ) -> Dict:
         """Grep implementation for encrypted files.
 
@@ -492,6 +510,7 @@ class _GrepMixin:
             excluded_prefix=excluded_prefix,
             level_limit=level_limit,
             ctx=ctx,
+            allowed_uris=allowed_uris,
         )
         results, files_scanned = await self._grep_files_parallel(
             file_uris,
@@ -514,6 +533,7 @@ class _GrepMixin:
         excluded_prefix: Optional[str],
         level_limit: int,
         ctx: Optional[RequestContext] = None,
+        allowed_uris: Optional[Set[str]] = None,
     ) -> List[str]:
         file_uris: List[str] = []
 
@@ -544,7 +564,7 @@ class _GrepMixin:
 
                 if entry.get("isDir"):
                     await search_recursive(entry_uri, current_depth + 1)
-                else:
+                elif allowed_uris is None or entry_uri in allowed_uris:
                     file_uris.append(entry_uri)
 
         normalized_uri = uri
@@ -558,7 +578,8 @@ class _GrepMixin:
         except Exception:
             return file_uris
         if not root_stat.get("isDir", False):
-            file_uris.append(normalized_uri)
+            if allowed_uris is None or normalized_uri in allowed_uris:
+                file_uris.append(normalized_uri)
             return file_uris
 
         await search_recursive(uri, 0)

@@ -412,8 +412,19 @@ impl HttpClient {
         wait: bool,
         timeout: Option<f64>,
         processing_mode: &str,
+        tags: Vec<String>,
+        tag_mode: &str,
     ) -> Result<serde_json::Value> {
-        let body = Self::build_write_body(uri, content, mode, wait, timeout, processing_mode);
+        let body = Self::build_write_body(
+            uri,
+            content,
+            mode,
+            wait,
+            timeout,
+            processing_mode,
+            tags,
+            tag_mode,
+        );
         self.post("/api/v1/content/write", &body).await
     }
 
@@ -440,6 +451,8 @@ impl HttpClient {
         wait: bool,
         timeout: Option<f64>,
         processing_mode: &str,
+        tags: Vec<String>,
+        tag_mode: &str,
     ) -> Value {
         let mut body = serde_json::json!({
             "uri": uri,
@@ -449,6 +462,13 @@ impl HttpClient {
             "timeout": timeout,
             "processing_mode": processing_mode,
         });
+        if !tags.is_empty() {
+            let obj = body
+                .as_object_mut()
+                .expect("write request body must be an object");
+            obj.insert("tags".to_string(), serde_json::json!(tags));
+            obj.insert("tag_mode".to_string(), serde_json::json!(tag_mode));
+        }
         compact_request_body(&mut body);
         body
     }
@@ -550,8 +570,9 @@ impl HttpClient {
         abs_limit: i32,
         show_all_hidden: bool,
         node_limit: i32,
+        tags: &[String],
     ) -> Result<serde_json::Value> {
-        let params = vec![
+        let mut params = vec![
             ("uri".to_string(), uri.to_string()),
             ("simple".to_string(), simple.to_string()),
             ("recursive".to_string(), recursive.to_string()),
@@ -560,6 +581,9 @@ impl HttpClient {
             ("show_all_hidden".to_string(), show_all_hidden.to_string()),
             ("node_limit".to_string(), node_limit.to_string()),
         ];
+        for tag in tags {
+            params.push(("tags".to_string(), tag.clone()));
+        }
         self.get("/api/v1/fs/ls", &params).await
     }
 
@@ -571,8 +595,9 @@ impl HttpClient {
         show_all_hidden: bool,
         node_limit: i32,
         level_limit: i32,
+        tags: &[String],
     ) -> Result<serde_json::Value> {
-        let params = vec![
+        let mut params = vec![
             ("uri".to_string(), uri.to_string()),
             ("output".to_string(), output.to_string()),
             ("abs_limit".to_string(), abs_limit.to_string()),
@@ -580,6 +605,9 @@ impl HttpClient {
             ("node_limit".to_string(), node_limit.to_string()),
             ("level_limit".to_string(), level_limit.to_string()),
         ];
+        for tag in tags {
+            params.push(("tags".to_string(), tag.clone()));
+        }
         self.get("/api/v1/fs/tree", &params).await
     }
 
@@ -707,6 +735,7 @@ impl HttpClient {
         ignore_case: bool,
         node_limit: i32,
         level_limit: i32,
+        tags: &[String],
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "uri": uri,
@@ -715,6 +744,7 @@ impl HttpClient {
             "case_insensitive": ignore_case,
             "node_limit": node_limit,
             "level_limit": level_limit,
+            "tags": (!tags.is_empty()).then(|| tags),
         });
         self.post("/api/v1/search/grep", &body).await
     }
@@ -2072,6 +2102,8 @@ mod tests {
             true,
             Some(3.0),
             "semantic_and_vectors",
+            vec![],
+            "replace",
         );
 
         assert_eq!(
@@ -2097,6 +2129,8 @@ mod tests {
             true,
             None,
             "semantic_and_vectors",
+            vec![],
+            "replace",
         );
 
         assert!(body.get("processing_mode").is_none());
@@ -2111,6 +2145,8 @@ mod tests {
             true,
             None,
             "vectors_only",
+            vec![],
+            "replace",
         );
 
         assert_eq!(body["processing_mode"], "vectors_only");
@@ -2122,7 +2158,16 @@ mod tests {
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
-            .ls("viking://resources", false, false, "agent", 256, false, 1)
+            .ls(
+                "viking://resources",
+                false,
+                false,
+                "agent",
+                256,
+                false,
+                1,
+                &[],
+            )
             .await
             .expect("ls request should succeed");
 
@@ -2248,7 +2293,7 @@ mod tests {
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
-            .tree("viking://resources", "agent", 256, false, 1, 3)
+            .tree("viking://resources", "agent", 256, false, 1, 3, &[])
             .await
             .expect("tree request should succeed");
 

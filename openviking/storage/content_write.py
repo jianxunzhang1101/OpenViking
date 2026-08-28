@@ -46,6 +46,7 @@ from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta, vectorize_file
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import validate_safe_viking_uri_path
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
@@ -124,11 +125,14 @@ class ContentWriteCoordinator:
         wait: bool = False,
         timeout: Optional[float] = None,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        tags: list[str] | None = None,
+        tag_mode: str = "replace",
     ) -> Dict[str, Any]:
         self._validate_mode(mode)
         processing_mode = normalize_processing_mode(processing_mode)
         normalized_uri = self._validate_uri_path(uri, field_name="uri")
         self._ensure_content_write_policy(normalized_uri)
+        ingest_options = IngestOptions.from_search_tags(tags, mode=tag_mode)
         self._viking_fs._ensure_mutable_access(normalized_uri, ctx)
 
         if mode == "create":
@@ -139,6 +143,7 @@ class ContentWriteCoordinator:
                 wait=wait,
                 timeout=timeout,
                 processing_mode=processing_mode,
+                ingest_options=ingest_options,
             )
 
         stat = await self._safe_stat(normalized_uri, ctx=ctx, allow_not_found=True)
@@ -154,6 +159,7 @@ class ContentWriteCoordinator:
                 processing_mode=processing_mode,
                 result_mode=mode,
                 validate_extension=False,
+                ingest_options=ingest_options,
             )
         if stat.get("isDir"):
             raise InvalidArgumentError(
@@ -179,6 +185,7 @@ class ContentWriteCoordinator:
                 written_bytes=written_bytes,
                 telemetry_id=telemetry_id,
                 processing_mode=processing_mode,
+                ingest_options=ingest_options,
             )
 
         return await self._write_direct_with_refresh(
@@ -193,6 +200,7 @@ class ContentWriteCoordinator:
             written_bytes=written_bytes,
             telemetry_id=telemetry_id,
             processing_mode=processing_mode,
+            ingest_options=ingest_options,
         )
 
     async def batch_write(
@@ -575,6 +583,8 @@ class ContentWriteCoordinator:
         target_uri: str = "",
         recursive: bool = False,
         force_refresh: bool = False,
+        ingest_options: IngestOptions | None = None,
+        ingest_options_by_uri: dict[str, IngestOptions] | None = None,
     ) -> FreshnessAction:
         changed_entries = len({uri for values in changes.values() for uri in values})
         semantic_config = get_openviking_config().semantic
@@ -604,6 +614,8 @@ class ContentWriteCoordinator:
             role=str(ctx.role),
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
+            ingest_options=ingest_options,
+            ingest_options_by_uri=ingest_options_by_uri,
             coalesce_key=(
                 build_semantic_coalesce_key(
                     context_type=context_type,
@@ -771,6 +783,7 @@ class ContentWriteCoordinator:
         written_bytes: int,
         telemetry_id: str,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        ingest_options: IngestOptions | None = None,
     ) -> Dict[str, Any]:
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
         try:
@@ -813,6 +826,7 @@ class ContentWriteCoordinator:
                     uri=uri,
                     context_type=context_type,
                     ctx=ctx,
+                    ingest_options=ingest_options,
                 )
                 post_process_started = True
             else:
@@ -823,6 +837,11 @@ class ContentWriteCoordinator:
                     ctx=ctx,
                     change_type="added" if mode == "create" else "modified",
                     force_refresh=wait,
+                    ingest_options_by_uri=(
+                        {uri: ingest_options}
+                        if ingest_options is not None and ingest_options.search_tags is not None
+                        else None
+                    ),
                 )
                 post_process_started = True
             await self._viking_fs._async_agfs.pathlock_release(lease)
@@ -920,6 +939,7 @@ class ContentWriteCoordinator:
         uri: str,
         context_type: str,
         ctx: RequestContext,
+        ingest_options: IngestOptions | None = None,
     ) -> bool:
         parent = VikingURI(uri).parent
         if parent is None:
@@ -931,6 +951,7 @@ class ContentWriteCoordinator:
             parent_uri=parent.uri,
             context_type=context_type,
             ctx=ctx,
+            ingest_options=ingest_options,
         )
 
     async def _vectorize_abstract_overview(self, *, uri: str, ctx: RequestContext) -> bool:
@@ -1028,6 +1049,7 @@ class ContentWriteCoordinator:
         wait: bool,
         timeout: Optional[float],
         processing_mode: ProcessingMode,
+        ingest_options: IngestOptions | None = None,
         result_mode: str = "create",
         validate_extension: bool = True,
     ) -> Dict[str, Any]:
@@ -1060,6 +1082,7 @@ class ContentWriteCoordinator:
                 written_bytes=written_bytes,
                 telemetry_id=telemetry_id,
                 processing_mode=processing_mode,
+                ingest_options=ingest_options,
             )
 
         return await self._write_direct_with_refresh(
@@ -1075,6 +1098,7 @@ class ContentWriteCoordinator:
             written_bytes=written_bytes,
             telemetry_id=telemetry_id,
             processing_mode=processing_mode,
+            ingest_options=ingest_options,
         )
 
     async def _write_in_place(
@@ -1154,6 +1178,8 @@ class ContentWriteCoordinator:
         target_uri: str = "",
         recursive: bool = False,
         force_refresh: bool = False,
+        ingest_options: IngestOptions | None = None,
+        ingest_options_by_uri: dict[str, IngestOptions] | None = None,
     ) -> FreshnessAction:
         return await self._enqueue_semantic_refresh_changes(
             root_uri=root_uri,
@@ -1163,6 +1189,8 @@ class ContentWriteCoordinator:
             target_uri=target_uri,
             recursive=recursive,
             force_refresh=force_refresh,
+            ingest_options=ingest_options,
+            ingest_options_by_uri=ingest_options_by_uri,
         )
 
     async def _wait_for_queues(self, *, timeout: Optional[float]) -> Dict[str, Any]:
@@ -1202,6 +1230,7 @@ class ContentWriteCoordinator:
         written_bytes: int,
         telemetry_id: str,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+        ingest_options: IngestOptions | None = None,
     ) -> Dict[str, Any]:
         del processing_mode
 
@@ -1234,6 +1263,7 @@ class ContentWriteCoordinator:
                 uri=uri,
                 memory_type=MemoryUpdater.memory_type_from_uri(root_uri),
                 ctx=ctx,
+                ingest_options=ingest_options,
             )
             queue_status = None
             if embedding_requested and wait:

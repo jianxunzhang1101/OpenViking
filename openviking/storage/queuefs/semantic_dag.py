@@ -168,6 +168,7 @@ class SemanticDagExecutor:
         changes: Optional[Dict[str, List[str]]] = None,
         skip_vectorization: bool = False,
         ingest_options: IngestOptions | None = None,
+        ingest_options_by_uri: Optional[Dict[str, IngestOptions]] = None,
         coalesce_key: str = "",
         coalesce_version: int = 0,
         source: Optional[Dict[str, str]] = None,
@@ -185,6 +186,7 @@ class SemanticDagExecutor:
         self._changes = changes or {}
         self._skip_vectorization = skip_vectorization
         self._ingest_options = IngestOptions.from_value(ingest_options)
+        self._ingest_options_by_uri = dict(ingest_options_by_uri or {})
         self._coalesce_key = coalesce_key
         self._coalesce_version = coalesce_version
         self._source = dict(source) if source else None
@@ -698,7 +700,9 @@ class SemanticDagExecutor:
                     summary_dict=summary_dict,
                     ctx=self._ctx,
                     use_summary=use_summary,
-                    ingest_options=self._ingest_options,
+                    ingest_options=self._ingest_options_by_uri.get(
+                        file_path, self._ingest_options
+                    ),
                 )
             except Exception as e:
                 logger.error(

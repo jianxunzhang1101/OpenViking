@@ -158,6 +158,7 @@ type ListOptions struct {
 	NodeLimit     int
 	SortBy        string
 	SortOrder     string
+	Tags          []string
 }
 
 // TreeOptions controls Tree.
@@ -167,6 +168,7 @@ type TreeOptions struct {
 	ShowAllHidden bool
 	NodeLimit     int
 	LevelLimit    *int
+	Tags          []string
 }
 
 // RemoveOptions controls Remove.
@@ -183,6 +185,8 @@ type WriteOptions struct {
 	Timeout        *float64
 	Telemetry      any
 	ProcessingMode string
+	Tags           []string
+	TagMode        string
 	Extra          map[string]any
 }
 
@@ -299,6 +303,7 @@ type GrepOptions struct {
 	NodeLimit       *int
 	LevelLimit      *int
 	ExcludeURI      string
+	Tags            []string
 }
 
 // GlobOptions controls Glob.

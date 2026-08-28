@@ -364,6 +364,39 @@ async def test_async_http_client_write_forwards_processing_mode():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_write_forwards_explicit_tags_and_mode():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await client.write(
+        "viking://resources/demo.md",
+        "updated",
+        options={"tags": [], "tag_mode": "replace"},
+    )
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["tags"] == []
+    assert payload["tag_mode"] == "replace"
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_filesystem_tags_are_omission_aware():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: []
+
+    await client.ls("viking://resources")
+    await client.tree("viking://resources", tags=["env=prod"])
+
+    ls_params = client._request.await_args_list[0].kwargs["params"]
+    tree_params = client._request.await_args_list[1].kwargs["params"]
+    assert "tags" not in ls_params
+    assert tree_params["tags"] == ["env=prod"]
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_write_omits_default_processing_mode_for_legacy_servers():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))

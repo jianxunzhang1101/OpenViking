@@ -42,6 +42,9 @@ class _FakeVikingFS:
     def _uri_to_path(self, uri, ctx=None):
         return f"/fake/{uri}"
 
+    def _ensure_mutable_access(self, uri, ctx):
+        del uri, ctx
+
 
 def _sidecar(level=ContextLevel.ABSTRACT, body="Original body."):
     return render_abstract_overview(
@@ -136,6 +139,26 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
     vectorize_directory.assert_awaited_once()
     assert sidecar_result["semantic_status"] == "skipped"
     assert sidecar_result["vector_status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_write_builds_ingest_options_before_scheduling_resource_refresh(ctx):
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+    coordinator._safe_stat = AsyncMock(return_value={"isDir": False})
+    coordinator._resolve_root_uri = AsyncMock(return_value="viking://resources")
+    coordinator._write_direct_with_refresh = AsyncMock(return_value={"uri": "viking://resources/demo.md"})
+
+    await coordinator.write(
+        uri="viking://resources/demo.md",
+        content="updated",
+        ctx=ctx,
+        tags=["team=search"],
+        tag_mode="append",
+    )
+
+    ingest_options = coordinator._write_direct_with_refresh.await_args.kwargs["ingest_options"]
+    assert ingest_options.search_tags == ["team=search"]
+    assert ingest_options.search_tag_mode == "append"
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ from openviking.storage.abstract_overview import (
     render_abstract_overview,
 )
 from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
+from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
 
 

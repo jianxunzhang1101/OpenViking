@@ -310,6 +310,7 @@ class GrepRequest(BaseModel):
     case_insensitive: bool = False
     node_limit: Optional[int] = 256
     level_limit: int = 10
+    tags: Optional[List[str]] = None
 
 
 class GlobRequest(BaseModel):
@@ -533,6 +534,7 @@ async def grep(
             case_insensitive=request.case_insensitive,
             node_limit=request.node_limit,
             level_limit=request.level_limit,
+            tags=request.tags,
         )
     except AGFSNotFoundError:
         raise NotFoundError(resolved_uri, "file")

@@ -26,6 +26,8 @@ pub async fn ls(
     abs_limit: i32,
     show_all_hidden: bool,
     node_limit: i32,
+    tags: &[String],
+    show_tags: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -38,9 +40,10 @@ pub async fn ls(
             abs_limit,
             show_all_hidden,
             node_limit,
+            tags,
         )
         .await?;
-    output_filesystem_entries(&result, output_format, compact, false);
+    output_filesystem_entries(&result, output_format, compact, false, show_tags);
     Ok(())
 }
 
@@ -52,6 +55,7 @@ pub async fn tree(
     show_all_hidden: bool,
     node_limit: i32,
     level_limit: i32,
+    tags: &[String],
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -63,9 +67,10 @@ pub async fn tree(
             show_all_hidden,
             node_limit,
             level_limit,
+            tags,
         )
         .await?;
-    output_filesystem_entries(&result, output_format, compact, true);
+    output_filesystem_entries(&result, output_format, compact, true, false);
     Ok(())
 }
 
@@ -74,8 +79,11 @@ fn output_filesystem_entries(
     output_format: OutputFormat,
     compact: bool,
     is_tree: bool,
+    show_tags: bool,
 ) {
-    if let Some(rendered) = render_filesystem_entries_for_table(result, output_format, is_tree) {
+    if let Some(rendered) =
+        render_filesystem_entries_for_table(result, output_format, is_tree, show_tags)
+    {
         println!("{rendered}");
     } else {
         output_success(result, output_format, compact);
@@ -86,6 +94,7 @@ fn render_filesystem_entries_for_table(
     value: &Value,
     output_format: OutputFormat,
     is_tree: bool,
+    show_tags: bool,
 ) -> Option<String> {
     if matches!(output_format, OutputFormat::Json) {
         return None;
@@ -93,11 +102,16 @@ fn render_filesystem_entries_for_table(
     if is_tree {
         render_tree_entries_for_table(value)
     } else {
-        render_ls_entries_for_table(value)
+        render_ls_entries_for_table_with_tags(value, show_tags)
     }
 }
 
+#[cfg(test)]
 fn render_ls_entries_for_table(value: &Value) -> Option<String> {
+    render_ls_entries_for_table_with_tags(value, false)
+}
+
+fn render_ls_entries_for_table_with_tags(value: &Value, show_tags: bool) -> Option<String> {
     let (entries, profile) = filesystem_entries(value)?;
     let mut lines = Vec::new();
     let text_width = entry_text_width();
@@ -112,7 +126,7 @@ fn render_ls_entries_for_table(value: &Value) -> Option<String> {
         if index > 0 {
             lines.push(String::new());
         }
-        render_ls_entry(index + 1, entry, text_width, &mut lines);
+        render_ls_entry(index + 1, entry, text_width, show_tags, &mut lines);
     }
 
     append_profile_lines(profile, &mut lines);
@@ -155,7 +169,13 @@ fn filesystem_entries(value: &Value) -> Option<(Vec<&Value>, Option<&Value>)> {
     Some((entries.iter().collect(), profile))
 }
 
-fn render_ls_entry(rank: usize, entry: &Value, text_width: usize, lines: &mut Vec<String>) {
+fn render_ls_entry(
+    rank: usize,
+    entry: &Value,
+    text_width: usize,
+    show_tags: bool,
+    lines: &mut Vec<String>,
+) {
     let object = entry.as_object();
     let metadata = entry_metadata(object);
     lines.push(format!(
@@ -171,6 +191,24 @@ fn render_ls_entry(rank: usize, entry: &Value, text_width: usize, lines: &mut Ve
     }
 
     append_entry_abstract(object, ENTRY_INDENT, text_width, lines);
+    if show_tags {
+        let tags = object
+            .and_then(|object| object.get("tags"))
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .filter(|tags| !tags.is_empty())
+            .unwrap_or_else(|| "-".to_string());
+        lines.push(format!(
+            "{ENTRY_INDENT}{}",
+            theme::muted(format!("tags: {tags}"))
+        ));
+    }
 }
 
 fn render_tree_entry(rank: usize, entry: &Value, text_width: usize, lines: &mut Vec<String>) {
@@ -480,7 +518,7 @@ fn output_message_result(
 mod tests {
     use super::{
         render_filesystem_entries_for_table, render_ls_entries_for_table,
-        render_tree_entries_for_table,
+        render_ls_entries_for_table_with_tags, render_tree_entries_for_table,
     };
     use crate::output::render_profiled_scalar_result;
     use serde_json::json;
@@ -649,9 +687,28 @@ mod tests {
         ]);
 
         assert!(
-            render_filesystem_entries_for_table(&result, crate::output::OutputFormat::Json, false)
-                .is_none()
+            render_filesystem_entries_for_table(
+                &result,
+                crate::output::OutputFormat::Json,
+                false,
+                false,
+            )
+            .is_none()
         );
+    }
+
+    #[test]
+    fn ls_table_output_shows_requested_tags() {
+        let result = json!([
+            {"uri": "viking://resources/a.md", "isDir": false, "tags": ["env=prod", "team=search"]},
+            {"uri": "viking://resources/b.md", "isDir": false, "tags": []}
+        ]);
+
+        let rendered =
+            strip_ansi(&render_ls_entries_for_table_with_tags(&result, true).expect("ls"));
+
+        assert!(rendered.contains("tags: env=prod, team=search"));
+        assert!(rendered.contains("tags: -"));
     }
 
     fn strip_ansi(input: &str) -> String {

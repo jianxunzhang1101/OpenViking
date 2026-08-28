@@ -81,6 +81,7 @@ async def ls(
         description="Sort directory and file groups before applying node_limit",
     ),
     sort_order: Literal["asc", "desc"] = Query("asc", description="Sort direction"),
+    tags: list[str] | None = Query(None, description="Only include entries matching all k=v tags"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List directory contents."""
@@ -100,6 +101,7 @@ async def ls(
             node_limit=actual_node_limit,
             sort_by=sort_by,
             sort_order=sort_order,
+            tags=tags,
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -120,6 +122,7 @@ async def tree(
     node_limit: int = Query(1000, description="Maximum number of nodes to list"),
     limit: Optional[int] = Query(None, description="Alias for node_limit"),
     level_limit: int = Query(3, description="Maximum depth level to traverse"),
+    tags: list[str] | None = Query(None, description="Only include entries matching all k=v tags"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get directory tree."""
@@ -136,6 +139,7 @@ async def tree(
             show_all_hidden=show_all_hidden,
             node_limit=actual_node_limit,
             level_limit=level_limit,
+            tags=tags,
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")

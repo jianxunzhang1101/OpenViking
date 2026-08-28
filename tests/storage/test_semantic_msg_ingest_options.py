@@ -52,6 +52,23 @@ def test_semantic_msg_reads_legacy_search_tag_fields():
     assert msg.aggregate_directory is True
 
 
+def test_semantic_msg_round_trips_uri_scoped_ingest_options():
+    uri = "viking://resources/demo/file.md"
+    msg = SemanticMsg(
+        uri="viking://resources/demo",
+        context_type="resource",
+        ingest_options_by_uri={
+            uri: IngestOptions(search_tags=["team=search"], search_tag_mode="append")
+        },
+    )
+
+    restored = SemanticMsg.from_json(msg.to_json())
+
+    assert restored.ingest_options_by_uri == {
+        uri: IngestOptions(search_tags=["team=search"], search_tag_mode="append")
+    }
+
+
 def test_semantic_msg_round_trips_deferred_aggregation_flag():
     msg = SemanticMsg(
         uri="viking://resources/wide",

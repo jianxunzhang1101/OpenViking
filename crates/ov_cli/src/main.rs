@@ -281,8 +281,8 @@ enum AttrsCommands {
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Vec<String>,
         /// Tag update mode: replace or append (append replaces existing values by key)
-        #[arg(long, default_value = "replace")]
-        mode: String,
+        #[arg(long = "tag-mode", default_value = "replace")]
+        tag_mode: String,
         /// Recursively update descendant files and semantic nodes when target is a directory
         #[arg(long, default_value = "false")]
         recursive: bool,
@@ -422,10 +422,15 @@ enum Commands {
         /// locally, e.g. --args dry_run:true (supported keys: catalog, dry_run, skip_failed)
         #[arg(long = "args")]
         resource_args: Option<String>,
-        /// Explicit k=v retrieval tag to apply after import. Can be repeated.
-        #[arg(long = "tag", value_name = "k=v", help_heading = "Common options")]
+        /// Comma-separated explicit k=v retrieval tags to apply after import.
+        #[arg(
+            long = "tags",
+            value_delimiter = ',',
+            value_name = "k=v",
+            help_heading = "Common options"
+        )]
         tags: Vec<String>,
-        /// Tag update mode when --tag is provided
+        /// Tag update mode when --tags is provided
         #[arg(
             long = "tag-mode",
             default_value = "replace",
@@ -503,6 +508,23 @@ enum Commands {
             help_heading = "Common options"
         )]
         node_limit: i32,
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(
+            long = "tags",
+            value_delimiter = ',',
+            value_name = "k=v",
+            help_heading = "Common options"
+        )]
+        tags: Vec<String>,
+        /// Extra fields for human-readable output (currently: tags)
+        #[arg(
+            short = 'f',
+            long,
+            value_delimiter = ',',
+            value_name = "field",
+            help_heading = "Common options"
+        )]
+        fields: Vec<String>,
     },
     /// [Data] Get directory tree
     Tree {
@@ -541,6 +563,14 @@ enum Commands {
             help_heading = "Common options"
         )]
         level_limit: i32,
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(
+            long = "tags",
+            value_delimiter = ',',
+            value_name = "k=v",
+            help_heading = "Common options"
+        )]
+        tags: Vec<String>,
     },
     /// [Data] Create directory
     Mkdir {
@@ -662,6 +692,22 @@ enum Commands {
             help_heading = "Common options"
         )]
         timeout: Option<f64>,
+        /// Comma-separated explicit k=v retrieval tags for the written file.
+        #[arg(
+            long = "tags",
+            value_delimiter = ',',
+            value_name = "k=v",
+            help_heading = "Common options"
+        )]
+        tags: Vec<String>,
+        /// Tag update mode when --tags is provided
+        #[arg(
+            long = "tag-mode",
+            default_value = "replace",
+            value_parser = ["replace", "append"],
+            help_heading = "Common options"
+        )]
+        tag_mode: String,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
     #[command(hide = true)]
@@ -672,8 +718,8 @@ enum Commands {
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Vec<String>,
         /// Tag update mode: replace or append (append replaces existing values by key)
-        #[arg(long, default_value = "replace")]
-        mode: String,
+        #[arg(long = "tag-mode", default_value = "replace")]
+        tag_mode: String,
         /// Recursively update descendant files and semantic nodes when target is a directory
         #[arg(long, default_value = "false")]
         recursive: bool,
@@ -873,6 +919,14 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         level_limit: i32,
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(
+            long = "tags",
+            value_delimiter = ',',
+            value_name = "k=v",
+            help_heading = "Common options"
+        )]
+        tags: Vec<String>,
     },
     /// [Data] Run file glob pattern search
     Glob {
@@ -1150,10 +1204,15 @@ enum Commands {
         /// Preview prune_orphans deletions without mutating vectors
         #[arg(long, help_heading = "Common options")]
         dry_run: bool,
-        /// Explicit k=v retrieval tag for rebuilt vector records. Can be repeated.
-        #[arg(long = "tag", value_name = "k=v", help_heading = "Common options")]
+        /// Comma-separated explicit k=v retrieval tags for rebuilt vector records.
+        #[arg(
+            long = "tags",
+            value_delimiter = ',',
+            value_name = "k=v",
+            help_heading = "Common options"
+        )]
         tags: Vec<String>,
-        /// Tag update mode when --tag is provided
+        /// Tag update mode when --tags is provided
         #[arg(
             long = "tag-mode",
             default_value = "replace",
@@ -3360,14 +3419,22 @@ async fn main() {
             abs_limit,
             all,
             node_limit,
-        } => handlers::handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await,
+            tags,
+            fields,
+        } => {
+            handlers::handle_ls(
+                uri, simple, recursive, abs_limit, all, node_limit, tags, fields, ctx,
+            )
+            .await
+        }
         Commands::Tree {
             uri,
             abs_limit,
             all,
             node_limit,
             level_limit,
-        } => handlers::handle_tree(uri, abs_limit, all, node_limit, level_limit, ctx).await,
+            tags,
+        } => handlers::handle_tree(uri, abs_limit, all, node_limit, level_limit, tags, ctx).await,
         Commands::Mkdir { uri, description } => handlers::handle_mkdir(uri, description, ctx).await,
         Commands::Rm {
             uri,
@@ -3382,9 +3449,9 @@ async fn main() {
             AttrsCommands::SetTags {
                 uri,
                 tags,
-                mode,
+                tag_mode,
                 recursive,
-            } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
+            } => handlers::handle_set_tags(uri, tags, tag_mode, recursive, ctx).await,
         },
         Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
@@ -3483,6 +3550,8 @@ async fn main() {
             wait,
             processing_mode,
             timeout,
+            tags,
+            tag_mode,
         } => {
             let effective_mode = if let Some(m) = mode {
                 m
@@ -3499,6 +3568,8 @@ async fn main() {
                 wait,
                 timeout,
                 processing_mode,
+                tags,
+                tag_mode,
                 ctx,
             )
             .await
@@ -3506,9 +3577,9 @@ async fn main() {
         Commands::SetTags {
             uri,
             tags,
-            mode,
+            tag_mode,
             recursive,
-        } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
+        } => handlers::handle_set_tags(uri, tags, tag_mode, recursive, ctx).await,
         Commands::Reindex {
             uri,
             mode,
@@ -3588,6 +3659,7 @@ async fn main() {
             ignore_case,
             node_limit,
             level_limit,
+            tags,
         } => {
             handlers::handle_grep(
                 uri,
@@ -3596,6 +3668,7 @@ async fn main() {
                 ignore_case,
                 node_limit,
                 level_limit,
+                tags,
                 ctx,
             )
             .await
@@ -4275,7 +4348,7 @@ mod tests {
             .expect_err("help should exit through clap error");
         let help = err.to_string();
 
-        assert!(help.contains("--tag"));
+        assert!(help.contains("--tags"));
         assert!(help.contains("--tag-mode"));
     }
 
@@ -4398,10 +4471,8 @@ mod tests {
             "ov",
             "add-resource",
             "./README.md",
-            "--tag",
-            "team=search",
-            "--tag",
-            "env=test",
+            "--tags",
+            "team=search,env=test",
             "--tag-mode",
             "append",
         ])
@@ -4413,6 +4484,47 @@ mod tests {
                 assert_eq!(tag_mode, "append");
             }
             _ => panic!("expected add-resource command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_comma_delimited_tags_for_filesystem_commands() {
+        let ls = Cli::try_parse_from([
+            "ov",
+            "ls",
+            "viking://resources",
+            "--tags",
+            "team=search,env=prod",
+            "-f",
+            "tags",
+        ])
+        .expect("ls tags should parse");
+        match ls.command {
+            Commands::Ls { tags, fields, .. } => {
+                assert_eq!(tags, vec!["team=search", "env=prod"]);
+                assert_eq!(fields, vec!["tags"]);
+            }
+            _ => panic!("expected ls command"),
+        }
+
+        let tree = Cli::try_parse_from([
+            "ov",
+            "tree",
+            "viking://resources",
+            "--tags",
+            "team=search,env=prod",
+        ])
+        .expect("tree tags should parse");
+        match tree.command {
+            Commands::Tree { tags, .. } => assert_eq!(tags, vec!["team=search", "env=prod"]),
+            _ => panic!("expected tree command"),
+        }
+
+        let grep = Cli::try_parse_from(["ov", "grep", "needle", "--tags", "team=search,env=prod"])
+            .expect("grep tags should parse");
+        match grep.command {
+            Commands::Grep { tags, .. } => assert_eq!(tags, vec!["team=search", "env=prod"]),
+            _ => panic!("expected grep command"),
         }
     }
 
@@ -5373,7 +5485,7 @@ mod tests {
             "prune_orphans",
             "--wait=false",
             "--dry-run",
-            "--tag",
+            "--tags",
             "team=search",
             "--tag-mode",
             "append",

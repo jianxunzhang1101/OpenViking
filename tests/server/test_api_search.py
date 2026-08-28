@@ -4,6 +4,7 @@
 """Tests for search endpoints: find, search, grep, glob."""
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -11,6 +12,7 @@ import pytest
 from openviking.models.embedder.base import EmbedResult
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import search as search_router
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import InvalidArgumentError
@@ -996,6 +998,30 @@ async def test_grep(client_with_resource):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_grep_forwards_tags_to_filesystem_service(monkeypatch):
+    seen = {}
+
+    async def fake_grep(uri, pattern, **kwargs):
+        seen.update(uri=uri, pattern=pattern, **kwargs)
+        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+
+    monkeypatch.setattr(
+        search_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(grep=fake_grep)),
+    )
+
+    await search_router.grep(
+        search_router.GrepRequest(
+            uri="viking://resources", pattern="OpenViking", tags=["team=search", "env=prod"]
+        ),
+        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+
+    assert seen["tags"] == ["team=search", "env=prod"]
 
 
 async def test_grep_case_insensitive(client_with_resource):

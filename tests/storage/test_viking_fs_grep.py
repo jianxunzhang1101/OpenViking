@@ -211,6 +211,40 @@ async def test_grep_vikingdb_keeps_local_exclude_uri_guard(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_grep_vikingdb_intersects_candidates_with_allowed_uris(monkeypatch):
+    fs = VikingFS(agfs=_DummyAgfs())
+    vector_store = _DummyVectorStore(
+        results=[
+            {"uri": "viking://resources/untagged.md"},
+            {"uri": "viking://resources/tagged.md"},
+        ]
+    )
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
+
+    calls = []
+
+    async def fake_grep_in_files(file_uris, pattern, case_insensitive, node_limit, ctx):
+        calls.append(file_uris)
+        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": len(file_uris)}
+
+    monkeypatch.setattr(fs, "_grep_in_files", fake_grep_in_files)
+
+    await fs._grep_vikingdb_then_fs(
+        uri="viking://resources",
+        pattern="needle",
+        exclude_uri=None,
+        case_insensitive=False,
+        node_limit=1,
+        level_limit=3,
+        ctx=None,
+        allowed_uris={"viking://resources/tagged.md"},
+    )
+
+    assert calls == [["viking://resources/tagged.md"]]
+    assert vector_store.calls[0]["limit"] == 100000
+
+
+@pytest.mark.asyncio
 async def test_grep_preserves_dfs_order_and_node_limit(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
 
@@ -271,6 +305,44 @@ async def test_grep_preserves_dfs_order_and_node_limit(monkeypatch):
             "content": "match a2 line1",
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_grep_allowed_uris_filters_before_node_limit(monkeypatch):
+    fs = VikingFS(agfs=_DummyAgfs())
+
+    async def fake_stat(uri, ctx=None, skip_count=False):
+        return {"isDir": True}
+
+    async def fake_ls(uri, ctx=None, **kwargs):
+        return [
+            {"name": "untagged.md", "isDir": False},
+            {"name": "tagged.md", "isDir": False},
+        ]
+
+    def fake_agfs_read(path, offset=0, size=-1):
+        return b"match"
+
+    monkeypatch.setattr(fs, "stat", fake_stat)
+    monkeypatch.setattr(fs, "ls", fake_ls)
+    monkeypatch.setattr(
+        fs,
+        "_uri_to_path",
+        lambda uri, ctx=None: uri.replace("viking://", "/"),
+    )
+    monkeypatch.setattr(fs.agfs, "read", fake_agfs_read, raising=False)
+
+    result = await fs.grep(
+        "viking://resources",
+        pattern="match",
+        node_limit=1,
+        allowed_uris={"viking://resources/tagged.md"},
+    )
+
+    assert result["matches"] == [
+        {"line": 1, "uri": "viking://resources/tagged.md", "content": "match"}
+    ]
+    assert result["files_scanned"] == 1
 
 
 @pytest.mark.asyncio

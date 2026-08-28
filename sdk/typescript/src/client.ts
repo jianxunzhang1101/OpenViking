@@ -450,6 +450,7 @@ export class OpenVikingClient {
         exclude_uri: options.excludeUri
           ? normalizeURI(options.excludeUri)
           : undefined,
+        tags: options.tags,
       }),
     });
   }
@@ -476,6 +477,7 @@ export class OpenVikingClient {
         node_limit: options.nodeLimit ?? 1000,
         sort_by: options.sortBy,
         sort_order: options.sortOrder,
+        tags: options.tags,
       },
     });
   }
@@ -489,6 +491,7 @@ export class OpenVikingClient {
         show_all_hidden: options.showAllHidden ?? false,
         node_limit: options.nodeLimit ?? 1000,
         level_limit: options.levelLimit ?? 3,
+        tags: options.tags,
       },
     });
   }
@@ -575,6 +578,9 @@ export class OpenVikingClient {
       content,
       mode: options.mode,
       processing_mode: options.processingMode,
+      tags: options.tags,
+      tag_mode:
+        options.tags === undefined ? undefined : (options.tagMode ?? "replace"),
       wait: options.wait,
       timeout: options.timeout,
       telemetry: options.telemetry,
