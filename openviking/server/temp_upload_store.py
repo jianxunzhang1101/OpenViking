@@ -27,6 +27,7 @@ from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
 _CHUNK_SIZE = 1024 * 1024
 _SHARED_UPLOAD_ROOT = "viking://upload"
+_SHARED_CLEANUP_COOLDOWN_TTL_DIVISOR = 2
 _SHARED_CLEANUP_QUEUE_MAX_SIZE = 100
 _SHARED_CLEANUP_SLEEP_EVERY_REMOVALS = 10
 _SHARED_CLEANUP_SLEEP_SECONDS = 0.2
@@ -277,7 +278,7 @@ class TempUploadStore:
 
         account_id = ctx.account_id
         now = time.monotonic()
-        cooldown_seconds = ttl_seconds / 2
+        cooldown_seconds = ttl_seconds / _SHARED_CLEANUP_COOLDOWN_TTL_DIVISOR
         with _SHARED_CLEANUP_STATES_LOCK:
             state = _SHARED_CLEANUP_STATES.setdefault(account_id, _SharedCleanupState())
             if state.inflight:
