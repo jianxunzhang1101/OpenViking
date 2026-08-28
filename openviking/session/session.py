@@ -78,6 +78,39 @@ _AGENT_TRAINING_REQUIRED_MEMORY_TYPES = frozenset({"experiences"})
 _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
 _MEMORY_STEP_NAMES = ("long_term",)
 _CUMULATIVE_CHECKPOINT_VERSION = 2
+# Match inline image transports emitted inside coding-agent tool output.
+_INLINE_IMAGE_DATA_URL_RE = re.compile(
+    r"data:(image/[a-z0-9.+-]+)(?:;[^;,\s\"'\\]+)*;base64,([a-z0-9+/_=-]+)",
+    re.IGNORECASE,
+)
+_B64_JSON_RE = re.compile(
+    r"(([\"'])b64_json\2\s*:\s*)([\"'])([a-z0-9+/_=-]+)\3",
+    re.IGNORECASE,
+)
+
+
+def _inline_image_placeholder(mime: str, base64_chars: int) -> str:
+    return f"[OpenViking inline image omitted: mime={mime}, base64_chars={base64_chars}]"
+
+
+def _redact_inline_images(text: str) -> str:
+    def replace_data_url(match: re.Match[str]) -> str:
+        return _inline_image_placeholder(match.group(1), len(match.group(2)))
+
+    def replace_b64_json(match: re.Match[str]) -> str:
+        quote = match.group(3)
+        placeholder = _inline_image_placeholder("image/*", len(match.group(4)))
+        return f"{match.group(1)}{quote}{placeholder}{quote}"
+
+    return _B64_JSON_RE.sub(replace_b64_json, _INLINE_IMAGE_DATA_URL_RE.sub(replace_data_url, text))
+
+
+def _redact_inline_images_from_tool_outputs(messages: List[Message]) -> List[Message]:
+    for message in messages:
+        for part in message.parts:
+            if isinstance(part, ToolPart):
+                part.tool_output = _redact_inline_images(part.tool_output or "")
+    return messages
 
 
 def _publish_telemetry_summary_best_effort(snapshot: Any) -> None:
@@ -922,11 +955,11 @@ class Session:
         self,
         messages: List[Message],
     ) -> List[Message]:
-        """Return a memory-only copy with externalized tool outputs restored."""
+        """Return a sanitized memory-only copy with externalized tool outputs restored."""
         hydrated = [Message.from_dict(m.to_dict()) for m in messages]
         store = self._tool_result_store()
         if not store:
-            return hydrated
+            return _redact_inline_images_from_tool_outputs(hydrated)
 
         for msg in hydrated:
             for part in msg.parts:
@@ -967,7 +1000,7 @@ class Session:
                     continue
                 part.tool_output = result.get("content", "")
 
-        return hydrated
+        return _redact_inline_images_from_tool_outputs(hydrated)
 
     def _effective_tool_preview_chars(
         self,
@@ -4088,7 +4121,7 @@ class Session:
                 lines.append(p.text)
             elif isinstance(p, ToolPart) and p.tool_name:
                 status = p.tool_status or "completed"
-                output = p.tool_output or ""
+                output = _redact_inline_images(p.tool_output or "")
                 lines.append(f"[tool:{p.tool_name} ({status})] {output}")
             elif isinstance(p, ContextPart) and p.abstract:
                 lines.append(f"[context] {p.abstract}")
